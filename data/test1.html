@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Internet + AI Smart Scenario Visualization</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Arial', sans-serif;
+            background: #000;
+            color: #fff;
+            overflow: hidden;
+        }
+
+        .container { width: 100vw; height: 100vh; position: relative; }
+        .header { position: absolute; top: 20px; left: 30px; z-index: 100; }
+        .logo { font-size: 24px; font-weight: bold; letter-spacing: 3px; margin-bottom: 10px; }
+        .title { font-size: 18px; letter-spacing: 2px; color: #fff; }
+
+        .status-bar {
+            position: absolute; top: 20px; right: 30px;
+            display: flex; gap: 20px; z-index: 100;
+        }
+        .status-item {
+            display: flex; align-items: center; gap: 8px;
+            padding: 8px 15px; background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.3); border-radius: 4px;
+        }
+        .status-icon {
+            width: 8px; height: 8px; background: #fff; border-radius: 50%;
+            animation: blink 2s infinite;
+        }
+        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+        .left-panel, .right-panel {
+            position: absolute; top: 120px; width: 320px;
+            max-height: calc(100vh - 140px); overflow-y: auto; z-index: 50;
+        }
+        .left-panel { left: 30px; }
+        .right-panel { right: 30px; }
+
+        .panel-section {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.3);
+            margin-bottom: 15px; padding: 15px; backdrop-filter: blur(10px);
+        }
+        .section-title {
+            font-size: 12px; color: #fff; margin-bottom: 15px; padding-bottom: 8px;
+            border-bottom: 1px solid rgba(255,255,255,0.2); letter-spacing: 1px;
+        }
+
+        .stats-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 10px; margin-bottom: 15px; }
+        .stat-box { text-align: center; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); }
+        .stat-label { font-size: 10px; color: #888; margin-bottom: 5px; }
+        .stat-value { font-size: 20px; font-weight: bold; color: #fff; font-family: 'Courier New', monospace; }
+
+        .data-table { width: 100%; font-size: 11px; }
+        .data-table th {
+            color: #888; text-align: left; padding: 8px 5px;
+            border-bottom: 1px solid rgba(255,255,255,0.2); font-weight: normal;
+        }
+        .data-table td { padding: 8px 5px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+        .data-table tr:hover { background: rgba(255,255,255,0.1); }
+
+        .mini-chart { height: 80px; display: flex; align-items: flex-end; gap: 3px; margin-top: 10px; }
+        .mini-bar {
+            flex: 1; background: linear-gradient(to top,#fff,#888);
+            min-height: 5px; opacity: .7; transition: opacity .3s;
+        }
+        .mini-bar:hover { opacity: 1; }
+
+        .scatter-plot {
+            height: 150px; position: relative;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.1); margin-top: 10px;
+        }
+        .scatter-point {
+            position: absolute; width: 3px; height: 3px;
+            background: #fff; border-radius: 50%; box-shadow: 0 0 4px #fff;
+        }
+
+        .line-chart { height: 100px; position: relative; margin-top: 10px; }
+        .line-chart svg { width: 100%; height: 100%; }
+
+        .calendar { display: grid; grid-template-columns: repeat(7,1fr); gap: 5px; margin-top: 10px; }
+        .calendar-header { text-align: center; font-size: 10px; color: #888; padding: 5px; }
+        .calendar-day {
+            aspect-ratio: 1; display: flex; align-items: center; justify-content: center; font-size: 10px;
+            background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+            cursor: pointer; transition: all .3s;
+        }
+        .calendar-day:hover { background: rgba(255,255,255,0.2); border-color: #fff; }
+        .calendar-day.active { background: rgba(255,255,255,0.3); border-color: #fff; }
+
+        .info-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 11px; }
+        .info-label { color: #888; }
+        .info-value { color: #fff; font-family: 'Courier New', monospace; }
+
+        #globe-container { position: absolute; width: 100%; height: 100%; top: 0; left: 0; }
+
+        .bottom-bar {
+            position: absolute; bottom: 0; left: 0; right: 0; height: 40px;
+            background: rgba(255,255,255,0.05); border-top: 1px solid rgba(255,255,255,0.3);
+            display: flex; align-items: center; justify-content: space-around; font-size: 11px; z-index: 100;
+        }
+        .bottom-item { display: flex; align-items: center; gap: 8px; }
+        .color-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: rgba(0,0,0,0.3); }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.3); border-radius: 2px; }
+        .flight-path { position: absolute; width: 100%; height: 100%; pointer-events: none; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <div class="logo">DATAV</div>
+        <div class="title">互联网+智慧机场可视化平台</div>
+    </div>
+
+    <div class="status-bar">
+        <div class="status-item"><div class="status-icon"></div><span>System Running</span></div>
+        <div class="status-item"><div class="status-icon"></div><span>Data Sync</span></div>
+    </div>
+
+    <div id="globe-container"></div>
+
+    <div class="left-panel">
+        <div class="panel-section">
+            <div class="section-title">当日办理机组人数 Number of people checking in</div>
+            <div class="stats-grid">
+                <div class="stat-box"><div class="stat-label">进港人数</div><div class="stat-value">28869</div></div>
+                <div class="stat-box"><div class="stat-label">出港人数</div><div class="stat-value">9865</div></div>
+                <div class="stat-box"><div class="stat-label">出港人数</div><div class="stat-value">38698</div></div>
+                <div class="stat-box"><div class="stat-label">出港人数</div><div class="stat-value">98845</div></div>
+            </div>
+
+            <table class="data-table">
+                <thead><tr><th>国内</th><th>人数</th><th>实际起飞比例</th></tr></thead>
+                <tbody>
+                    <tr><td>KN</td><td>5687</td><td>95%</td></tr>
+                    <tr><td>MU</td><td>5429</td><td>94%</td></tr>
+                    <tr><td>MF</td><td>5328</td><td>92%</td></tr>
+                </tbody>
+            </table>
+
+            <div class="mini-chart">
+                <div class="mini-bar" style="height:45%"></div>
+                <div class="mini-bar" style="height:65%"></div>
+                <div class="mini-bar" style="height:55%"></div>
+                <div class="mini-bar" style="height:85%"></div>
+                <div class="mini-bar" style="height:70%"></div>
+                <div class="mini-bar" style="height:90%"></div>
+                <div class="mini-bar" style="height:60%"></div>
+                <div class="mini-bar" style="height:75%"></div>
+            </div>
+        </div>
+
+        <div class="panel-section">
+            <div class="section-title">航站统计量</div>
+            <div class="scatter-plot" id="scatter1"></div>
+        </div>
+
+        <div class="panel-section">
+            <div class="section-title">当日货运情况 Freight situation</div>
+            <table class="data-table">
+                <thead><tr><th>地区</th><th>AC值运量</th><th>环比趋势</th><th>数据提供部门</th><th>有效等级</th></tr></thead>
+                <tbody>
+                    <tr><td>北京</td><td>30000000</td><td>88%</td><td>3天</td><td>1.2</td></tr>
+                    <tr><td>广州</td><td>66666666</td><td>88%</td><td>7天</td><td>1.2</td></tr>
+                    <tr><td>深圳</td><td>18000000</td><td>88%</td><td>3天</td><td>1.2</td></tr>
+                    <tr><td>成都</td><td>200</td><td>92%</td><td>3天</td><td>0.5</td></tr>
+                    <tr><td>杭州</td><td>130000000</td><td>80%</td><td>7天</td><td>1.2</td></tr>
+                    <tr><td>上海</td><td>60000000</td><td>78%</td><td>7天</td><td>1.2</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="right-panel">
+        <div class="panel-section">
+            <div class="section-title">飞机整体处理/J007/</div>
+            <div class="line-chart">
+                <svg viewBox="0 0 280 100" preserveAspectRatio="none">
+                    <polyline points="0,80 35,60 70,70 105,40 140,50 175,30 210,45 245,35 280,25"
+                        fill="none" stroke="#fff" stroke-width="2" opacity="0.6"/>
+                    <polyline points="0,85 35,75 70,80 105,65 140,70 175,60 210,65 245,55 280,50"
+                        fill="none" stroke="#999" stroke-width="2" opacity="0.4"/>
+                </svg>
+            </div>
+            <div class="info-row">
+                <span class="info-label">08:00</span>
+                <span class="info-label">10:00</span>
+                <span class="info-label">12:00</span>
+                <span class="info-label">14:00</span>
+            </div>
+        </div>
+
+        <div class="panel-section">
+            <div class="section-title">人流量统计</div>
+            <div class="line-chart">
+                <svg viewBox="0 0 280 100" preserveAspectRatio="none">
+                    <path d="M 0,70 Q 70,20 140,60 T 280,40" fill="none" stroke="#fff" stroke-width="2" opacity="0.7"/>
+                </svg>
+            </div>
+            <div class="mini-chart" style="height:60px">
+                <div class="mini-bar" style="height:50%"></div>
+                <div class="mini-bar" style="height:70%"></div>
+                <div class="mini-bar" style="height:60%"></div>
+                <div class="mini-bar" style="height:85%"></div>
+                <div class="mini-bar" style="height:75%"></div>
+                <div class="mini-bar" style="height:90%"></div>
+                <div class="mini-bar" style="height:65%"></div>
+            </div>
+        </div>
+
+        <div class="panel-section">
+            <div class="section-title">行李数据统计</div>
+            <div class="line-chart">
+                <svg viewBox="0 0 280 100" preserveAspectRatio="none">
+                    <polyline points="0,60 40,45 80,55 120,35 160,40 200,25 240,30 280,20"
+                        fill="none" stroke="#fff" stroke-width="1.5" opacity="0.6"/>
+                    <polyline points="0,75 40,70 80,80 120,65 160,70 200,60 240,65 280,55"
+                        fill="none" stroke="#fff" stroke-width="1.5" opacity="0.3" stroke-dasharray="4,4"/>
+                </svg>
+            </div>
+            <div class="info-row">
+                <span class="info-label">01/01</span>
+                <span class="info-value">10 | 10月13日 20: 13票号</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">日期</span>
+                <span class="info-value">21/14 15 | 联票号 2H / 96 全程</span>
+            </div>
+        </div>
+
+        <div class="panel-section">
+            <div class="section-title">航班延误情况 Flight delays</div>
+            <div class="calendar">
+                <div class="calendar-header">S</div>
+                <div class="calendar-header">M</div>
+                <div class="calendar-header">T</div>
+                <div class="calendar-header">W</div>
+                <div class="calendar-header">T</div>
+                <div class="calendar-header">F</div>
+                <div class="calendar-header">S</div>
+            </div>
+            <div class="calendar" id="calendar"></div>
+        </div>
+    </div>
+
+    <div class="bottom-bar">
+        <div class="bottom-item"><div class="color-dot" style="background:#fff"></div><span>48112</span></div>
+        <div class="bottom-item"><div class="color-dot" style="background:#ccc"></div><span>78454</span></div>
+        <div class="bottom-item"><div class="color-dot" style="background:#999"></div><span>22991</span></div>
+        <div class="bottom-item"><div class="color-dot" style="background:#666"></div><span>43965</span></div>
+        <div class="bottom-item"><div class="color-dot" style="background:#ddd"></div><span>84521</span></div>
+        <div class="bottom-item"><div class="color-dot" style="background:#aaa"></div><span>51215</span></div>
+    </div>
+</div>
+
+<script>
+    // Three.js Globe Setup
+    const container = document.getElementById('globe-container');
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setClearColor(0x000000, 0);
+    container.appendChild(renderer.domElement);
+
+    camera.position.z = 300;
+
+    // Create wireframe globe
+    const radius = 80, segments = 64, rings = 64;
+    const globeGeometry = new THREE.SphereGeometry(radius, segments, rings);
+    const globeMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.15 });
+    const globe = new THREE.Mesh(globeGeometry, globeMaterial);
+    scene.add(globe);
+
+    // Latitude/Longitude grid
+    const linesMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.3 });
+
+    for (let lat = -80; lat <= 80; lat += 20) {
+        const latGeometry = new THREE.BufferGeometry();
+        const latPoints = [];
+        const phi = (90 - lat) * (Math.PI / 180);
+        const latRadius = radius * Math.sin(phi);
+        for (let i = 0; i <= segments; i++) {
+            const theta = (i / segments) * Math.PI * 2;
+            const x = latRadius * Math.cos(theta);
+            const z = latRadius * Math.sin(theta);
+            const y = radius * Math.cos(phi);
+            latPoints.push(x, y, z);
+        }
+        latGeometry.setAttribute('position', new THREE.Float32BufferAttribute(latPoints, 3));
+        scene.add(new THREE.Line(latGeometry, linesMaterial));
+    }
+
+    for (let lon = 0; lon < 360; lon += 20) {
+        const lonGeometry = new THREE.BufferGeometry();
+        const lonPoints = [];
+        const theta = lon * (Math.PI / 180);
+        for (let i = 0; i <= rings; i++) {
+            const phi = (i / rings) * Math.PI;
+            const x = radius * Math.sin(phi) * Math.cos(theta);
+            const y = radius * Math.cos(phi);
+            const z = radius * Math.sin(phi) * Math.sin(theta);
+            lonPoints.push(x, y, z);
+        }
+        lonGeometry.setAttribute('position', new THREE.Float32BufferAttribute(lonPoints, 3));
+        scene.add(new THREE.Line(lonGeometry, linesMaterial));
+    }
+
+    // Stars/particles
+    const particlesGeometry = new THREE.BufferGeometry();
+    const particlesCount = 2000;
+    const positions = [];
+    for (let i = 0; i < particlesCount; i++) {
+        const phi = Math.random() * Math.PI * 2;
+        const theta = Math.random() * Math.PI;
+        const r = radius + Math.random() * 2;
+        const x = r * Math.sin(theta) * Math.cos(phi);
+        const y = r * Math.sin(theta) * Math.sin(phi);
+        const z = r * Math.cos(theta);
+        positions.push(x, y, z);
+    }
+    particlesGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    const particlesMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 0.5, transparent: true, opacity: 0.6 });
+    const particles = new THREE.Points(particlesGeometry, particlesMaterial);
+    scene.add(particles);
+
+    // Simple arcs
+    function createArc(start, end, color) {
+        const curve = new THREE.QuadraticBezierCurve3(
+            new THREE.Vector3(start.x, start.y, start.z),
+            new THREE.Vector3((start.x + end.x) / 2 * 1.3, (start.y + end.y) / 2 * 1.3, (start.z + end.z) / 2 * 1.3),
+            new THREE.Vector3(end.x, end.y, end.z)
+        );
+        const points = curve.getPoints(50);
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+        const material = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.6 });
+        const arc = new THREE.Line(geometry, material);
+        scene.add(arc);
+    }
+
+    function latLonToVector3(lat, lon, r) {
+        const phi = (90 - lat) * (Math.PI / 180);
+        const theta = (lon + 180) * (Math.PI / 180);
+        return new THREE.Vector3(
+            -r * Math.sin(phi) * Math.cos(theta),
+            r * Math.cos(phi),
+            r * Math.sin(phi) * Math.sin(theta)
+        );
+    }
+
+    const routes = [
+        { from: [40, -74], to: [51, -0.1], color: 0xffffff },
+        { from: [35.7, 139.7], to: [1.3, 103.8], color: 0xcccccc },
+        { from: [34, -118], to: [39.9, 116.4], color: 0xffffff },
+        { from: [25.2, 55.3], to: [-33.9, 151.2], color: 0xaaaaaa },
+    ];
+    routes.forEach(r => {
+        const s = latLonToVector3(r.from[0], r.from[1], radius);
+        const e = latLonToVector3(r.to[0], r.to[1], radius);
+        createArc(s, e, r.color);
+    });
+
+    // Animate
+    function animate() {
+        requestAnimationFrame(animate);
+        globe.rotation.y += 0.001;
+        particles.rotation.y += 0.0005;
+        renderer.render(scene, camera);
+    }
+    animate();
+
+    // Resize
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // Fake scatter view
+    (function generateScatter() {
+        const scatter = document.getElementById('scatter1');
+        for (let i = 0; i < 200; i++) {
+            const point = document.createElement('div');
+            point.className = 'scatter-point';
+            point.style.left = Math.random() * 100 + '%';
+            point.style.bottom = Math.random() * 100 + '%';
+            point.style.opacity = Math.random() * 0.5 + 0.3;
+            scatter.appendChild(point);
+        }
+    })();
+
+    // Fake calendar
+    (function generateCalendar() {
+        const calendar = document.getElementById('calendar');
+        const daysInMonth = 30, startDay = 1;
+        for (let i = 0; i < startDay; i++) calendar.appendChild(document.createElement('div'));
+        for (let d = 1; d <= daysInMonth; d++) {
+            const dayEl = document.createElement('div');
+            dayEl.className = 'calendar-day';
+            if (Math.random() > 0.7) dayEl.classList.add('active');
+            dayEl.textContent = d;
+            calendar.appendChild(dayEl);
+        }
+    })();
+</script>
+</body>
+</html>

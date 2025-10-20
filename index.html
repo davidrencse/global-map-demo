@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Global Social Sentiment – Globe + Side Dashboards (Draggable)</title>
+
+<!-- Three.js r128 + OrbitControls -->
+<script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
+<script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<!-- CSV parser -->
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+<style>
+  :root{
+    --ink:#eaeaea; --ink-dim:#bcbcbc;
+    --panel:#0b0b0b; --stroke:rgba(255,255,255,.24);
+  }
+  html,body{height:100%;margin:0;background:#000;color:var(--ink);font:500 14px/1.4 system-ui,Segoe UI,Roboto,Arial}
+  #canvas{position:fixed;inset:0}
+
+  /* Header + status */
+  #ui{position:fixed;left:24px;top:18px;z-index:10;display:flex;gap:16px;align-items:center}
+  .title{font-weight:800;letter-spacing:.5px}
+  #monthLabel{opacity:.55}
+  #status{padding:4px 8px;border:1px solid var(--stroke);border-radius:6px;background:#111}
+  #status.error{border-color:#ff7070;background:#220a0a;color:#ffd7d7}
+
+  /* Legend */
+  #legend{position:fixed;left:24px;top:54px;z-index:10;padding:8px 10px;border-radius:8px;background:#0c0c0c;border:1px solid var(--stroke);font-size:12px;opacity:.85}
+
+  /* Timeline */
+  #timeline{position:fixed;left:24px;right:24px;bottom:16px;z-index:10;display:flex;gap:12px;align-items:center}
+  .btn{cursor:pointer;border:1px solid var(--stroke);padding:6px 10px;border-radius:6px;background:#141414;color:var(--ink)}
+  .btn[disabled]{opacity:.45;cursor:not-allowed}
+  .range{flex:1;accent-color:#888}
+  .stamp{min-width:145px;text-align:right;color:var(--ink-dim)}
+
+  /* Side panels */
+  .panel{position:fixed;top:110px;width:340px;max-height:calc(100vh - 150px);overflow:auto;
+         background:var(--panel);border:1px solid var(--stroke);padding:12px 12px 16px;border-radius:6px;z-index:11;}
+  .panel h3{margin:0 0 10px;font:700 13px/1.1 system-ui;letter-spacing:.5px;color:var(--ink);
+            cursor:move; user-select:none;}
+  .panel small{color:var(--ink-dim)}
+  .panel .sep{height:1px;background:var(--stroke);margin:10px 0}
+  .left{left:24px}
+  .right{right:24px}
+
+  /* Lists/Bars */
+  .list{display:grid;grid-template-columns: 1fr auto;gap:6px 10px}
+  .list .key{color:var(--ink)}
+  .list .val{color:var(--ink-dim)}
+  .barrow{display:flex;align-items:center;gap:8px}
+  .barwrap{flex:1;height:8px;background:#151515;border:1px solid var(--stroke)}
+  .bar{height:100%;background:linear-gradient(90deg,#fff,#bbb)}
+  .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;color:#ddd}
+
+  /* Date Range Modal (centered, fixed) */
+  #dateBox{
+    position:fixed; inset:0; display:flex; align-items:flex-start; padding-top: 12px; justify-content:center; z-index:50;
+    pointer-events:none;
+  }
+  #dateCard{
+    pointer-events:auto; min-width:560px; padding:14px; border-radius:10px;
+    background:#0f0f0f; border:1px solid var(--stroke); box-shadow:0 10px 40px rgba(0,0,0,.6);
+    display:flex; gap:12px; align-items:center; justify-content:center;
+  }
+  #dateCard label{ font-size:12px; color:#bcbcbc; margin-right:6px; }
+  #dateCard input[type="month"]{
+    background:#111;border:1px solid rgba(255,255,255,.25);
+    color:#eaeaea;padding:6px 8px;border-radius:6px;min-width:130px
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<!-- Header & legend -->
+<div id="ui">
+  <div class="title">Global Social Sentiment</div>
+  <div id="monthLabel"></div>
+</div>
+<div id="legend">
+  <div><b>Visualization:</b> countries with posts in the month are <b>highlighted</b> (wire borders).</div>
+  <div>Use the timeline to manipulate date.</div>
+  <div>By David Ren at david.ren@nyu.edu</div>
+</div>
+
+<!-- Date Range (centered, fixed) -->
+<div id="dateBox">
+  <div id="dateCard">
+    <label for="startMonth">Start</label>
+    <input id="startMonth" type="month" placeholder="YYYY-MM"/>
+    <label for="endMonth" style="margin-left:8px;">End</label>
+    <input id="endMonth" type="month" placeholder="YYYY-MM"/>
+    <button id="applyRange" class="btn">Apply</button>
+    <button id="resetRange" class="btn">Reset</button>
+  </div>
+</div>
+
+<!-- LEFT: Countries this month -->
+<div class="panel left" id="panelCountries">
+  <h3>Countries with posts <small id="pc-month"></small></h3>
+  <div class="mono" id="pc-total">—</div>
+  <div class="sep"></div>
+  <div class="list" id="pc-list"></div>
+</div>
+
+<!-- RIGHT: Platforms this month -->
+<div class="panel right" id="panelPlatforms">
+  <h3>Posts by platform <small id="pp-month"></small></h3>
+  <div class="mono" id="pp-total">—</div>
+  <div class="sep"></div>
+  <div id="pp-bars"></div>
+</div>
+
+<!-- Timeline -->
+<div id="timeline">
+  <button id="play" class="btn" disabled>▶ Play</button>
+  <input id="slider" class="range" type="range" value="0" min="0" max="0" step="1" disabled>
+  <div class="stamp"><span id="from"></span> → <span id="to"></span></div>
+</div>
+
+<script>
+/* ===== PATHS (LOCAL) ===== */
+const CSV_PATH    = 'data/sentimentdataset.csv';
+const EARTH_TEX   = 'assets/earth.jpg';
+const GEOJSON_LOC = 'assets/countries.geo.json';
+
+/* ===== TUNING ===== */
+/* brighter defaults & highlight */
+const R            = 80;
+const ROT_SPEED    = 0.15;            // deg/frame
+const BORDER_COLOR = 0xEAF2FF;        // light border
+const HILITE_COLOR = 0xFFFFFF;        // pure white highlight
+const BORDER_ALPHA = 0.18;            // more visible
+const HILITE_ALPHA = 1.00;
+
+/* ===== THREE SETUP ===== */
+const canvas = document.getElementById('canvas');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, .1, 1000);
+camera.position.set(0,0,260);
+
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.enablePan=false;
+controls.minDistance = 160; controls.maxDistance = 360;
+
+const globe = new THREE.Group(); scene.add(globe);
+
+/* Earth mesh + texture */
+const sphereGeo = new THREE.SphereGeometry(R, 64, 64);
+const earthMat  = new THREE.MeshBasicMaterial({color: 0xffffff});
+const earthMesh = new THREE.Mesh(sphereGeo, earthMat);
+earthMesh.renderOrder = 1;
+globe.add(earthMesh);
+new THREE.TextureLoader().load(
+  EARTH_TEX,
+  (tex)=>{ tex.anisotropy = renderer.capabilities.getMaxAnisotropy(); earthMat.map = tex; earthMat.needsUpdate = true; },
+  undefined,
+  ()=>setError('Failed to load assets/earth.jpg')
+);
+
+const bordersRoot = new THREE.Group(); globe.add(bordersRoot);
+
+/* ===== UI HANDLES ===== */
+const statusEl = document.getElementById('status');
+const monthEl  = document.getElementById('monthLabel');
+const slider   = document.getElementById('slider');
+const playBtn  = document.getElementById('play');
+const fromEl   = document.getElementById('from');
+const toEl     = document.getElementById('to');
+
+/* date range controls */
+const startMonthEl = document.getElementById('startMonth');
+const endMonthEl   = document.getElementById('endMonth');
+const applyRangeEl = document.getElementById('applyRange');
+const resetRangeEl = document.getElementById('resetRange');
+
+/* side panel DOM */
+const pcMonth = document.getElementById('pc-month');
+const pcTotal = document.getElementById('pc-total');
+const pcList  = document.getElementById('pc-list');
+
+const ppMonth = document.getElementById('pp-month');
+const ppTotal = document.getElementById('pp-total');
+const ppBars  = document.getElementById('pp-bars');
+
+/* months: all vs. current view */
+let allMonths = [], viewMonths = [], monthIndex = 0;
+const C_MAP = new Map();   // month -> [{name,count}]
+const P_MAP = new Map();   // month -> [{platform,count}]
+const countryToBorderGroup = new Map();
+const aliasToCountryName = new Map();
+
+function setStatus(msg){ if(statusEl){ statusEl.textContent=msg; statusEl.classList.remove('error'); } }
+function setError(msg){ if(statusEl){ statusEl.textContent=msg; statusEl.classList.add('error'); } console.error(msg); }
+function enableTimeline(on){ slider.disabled = !on; playBtn.disabled = !on; }
+function latLonToVec3(lat, lon, r=R){
+  const phi=(90-lat)*Math.PI/180, theta=(lon+180)*Math.PI/180;
+  return new THREE.Vector3(
+    -r*Math.sin(phi)*Math.cos(theta),
+     r*Math.cos(phi),
+     r*Math.sin(phi)*Math.sin(theta)
+  );
+}
+
+/* GeoJSON → line loops */
+function ringToLine(ring, elev=0.35, color=BORDER_COLOR, alpha=BORDER_ALPHA){
+  const pts=[];
+  for(const [lon,lat] of ring){
+    const v = latLonToVec3(lat, lon, R+elev);
+    pts.push(v.x,v.y,v.z);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(pts),3));
+  const m = new THREE.LineLoop(g, new THREE.LineBasicMaterial({
+    color, transparent:true, opacity:alpha
+  }));
+  m.renderOrder = 2;
+  return m;
+}
+function setBorderHighlight(countryName, on){
+  const grp = countryToBorderGroup.get(countryName);
+  if(!grp) return;
+  grp.traverse(obj=>{
+    if(obj.material){
+      obj.material.color.set(on?HILITE_COLOR:BORDER_COLOR);
+      obj.material.opacity = on?HILITE_ALPHA:BORDER_ALPHA;
+      obj.material.needsUpdate = true;
+    }
+  });
+}
+
+/* ===== LOAD BORDERS ===== */
+async function loadBorders(){
+  const resp = await fetch(GEOJSON_LOC);
+  if(!resp.ok) throw new Error('HTTP '+resp.status);
+  const gj = await resp.json();
+
+  for(const f of gj.features){
+    const props = f.properties || {};
+    const name = (props.name && props.name.common) || props.name || props.ADMIN || props.ADMIN_NAME || props.ADMIN_NAME_EN;
+    if(!name) continue;
+
+    // alias map
+    aliasToCountryName.set(name, name);
+    if(props.cca3) aliasToCountryName.set(props.cca3, name);
+    if(props.cca2) aliasToCountryName.set(props.cca2, name);
+    if(name === 'United States') aliasToCountryName.set('USA', name), aliasToCountryName.set('U.S.', name), aliasToCountryName.set('US', name);
+    if(name === 'United Kingdom') aliasToCountryName.set('UK', name), aliasToCountryName.set('England', name), aliasToCountryName.set('Great Britain', name);
+    if(name === 'Korea, Republic of') aliasToCountryName.set('South Korea', name), aliasToCountryName.set('Korea South', name);
+    if(name === 'Russian Federation') aliasToCountryName.set('Russia', name);
+    if(name === 'Iran, Islamic Republic of') aliasToCountryName.set('Iran', name);
+    if(name === 'Viet Nam') aliasToCountryName.set('Vietnam', name);
+    if(name === 'United Arab Emirates') aliasToCountryName.set('UAE', name);
+
+    const geom = f.geometry; if(!geom) continue;
+    const grp = new THREE.Group(); grp.name = name;
+
+    const addPolygon = (poly) => { for(const ring of poly){ grp.add(ringToLine(ring)); } };
+    if(geom.type === 'MultiPolygon'){
+      for(const poly of geom.coordinates) addPolygon(poly);
+    } else if(geom.type === 'Polygon'){
+      addPolygon(geom.coordinates);
+    }
+    bordersRoot.add(grp);
+    countryToBorderGroup.set(name, grp);
+  }
+}
+
+/* ===== LOAD CSV & BUILD MONTH MAPS ===== */
+async function loadCSV(){
+  return new Promise((resolve)=>{
+    Papa.parse(CSV_PATH, {
+      download:true, header:true, skipEmptyLines:true,
+      complete: (res)=>{
+        const rows = res.data || [];
+        if(!rows.length){ setError('CSV empty: data/sentimentdataset.csv'); resolve({months:[]}); return; }
+
+        const monthsSet=new Set();
+        const monthCountryCount = new Map(); // "YYYY-MM|Country" -> count
+        const monthPlatformCount= new Map(); // "YYYY-MM|Platform" -> count
+        let unmatched=0;
+
+        const normName = raw => {
+          const a = (raw||'').toString().trim();
+          if(aliasToCountryName.has(a)) return aliasToCountryName.get(a);
+          if(/^uk$/i.test(a)) return aliasToCountryName.get('United Kingdom')||'United Kingdom';
+          if(/^(u\.?s\.?a\.?|u\.?s\.?|us)$/i.test(a)) return aliasToCountryName.get('United States')||'United States';
+          if(/^uae$/i.test(a)) return aliasToCountryName.get('United Arab Emirates')||'United Arab Emirates';
+          return a;
+        };
+
+        function parseDate(v){
+          if(!v) return null;
+          const d=new Date(v);
+          if(!isNaN(d)) return d;
+          const cleaned = v.replace(/(\d{2})-(\d{2})-(\d{4})/,'$3-$2-$1'); // DD-MM-YYYY → YYYY-MM-DD
+          const d2=new Date(cleaned);
+          return isNaN(d2) ? null : d2;
+        }
+
+        for(const r of rows){
+          const countryRaw = r.Country || r.country || r.COUNTRY;
+          const platformRaw= r.Platform || r.platform || r.PLATFORM;
+          const ts = r.Timestamp || r.timestamp || r.Date || r.DATE;
+          const d = parseDate(ts);
+          if(!d) continue;
+
+          const m = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+          monthsSet.add(m);
+
+          if (countryRaw){
+            const name = normName(countryRaw);
+            if(countryToBorderGroup.has(name)){
+              const key = `${m}|${name}`;
+              monthCountryCount.set(key, (monthCountryCount.get(key)||0)+1);
+            }else{
+              unmatched++;
+            }
+          }
+          if (platformRaw){
+            const p = (platformRaw||'').toString().trim() || 'Unknown';
+            const keyp = `${m}|${p}`;
+            monthPlatformCount.set(keyp, (monthPlatformCount.get(keyp)||0)+1);
+          }
+        }
+        if(unmatched) console.warn('Unmatched countries in CSV:', unmatched);
+
+        const months = Array.from(monthsSet).sort();
+
+        // fill global maps C_MAP / P_MAP
+        for(const m of months){
+          const carr=[], parr=[];
+          for(const [key,count] of monthCountryCount.entries()){
+            const [km,name]=key.split('|'); if(km===m) carr.push({name,count});
+          }
+          for(const [key,count] of monthPlatformCount.entries()){
+            const [km,plat]=key.split('|'); if(km===m) parr.push({platform:plat,count});
+          }
+          carr.sort((a,b)=>b.count-a.count);
+          parr.sort((a,b)=>b.count-a.count);
+          C_MAP.set(m, carr);
+          P_MAP.set(m, parr);
+        }
+        resolve({months});
+      }
+    });
+  });
+}
+
+/* ===== SIDE PANELS RENDER ===== */
+function renderCountriesPanel(month, list){
+  document.getElementById('pc-month').textContent = month ? `(${month})` : '';
+  const total = list.reduce((s,r)=>s+r.count,0);
+  document.getElementById('pc-total').textContent = total ? `${total.toLocaleString()} posts` : '—';
+  const pcList = document.getElementById('pc-list');
+  pcList.innerHTML = '';
+  const top = list.slice(0,15);
+  for(const row of top){
+    const key = document.createElement('div'); key.className='key'; key.textContent=row.name;
+    const val = document.createElement('div'); val.className='val'; val.textContent=row.count.toLocaleString();
+    pcList.appendChild(key); pcList.appendChild(val);
+  }
+  if(!top.length){
+    const n = document.createElement('div');
+    n.style.opacity='.7'; n.textContent='No countries this month.'; pcList.appendChild(n);
+  }
+}
+function renderPlatformsPanel(month, list){
+  document.getElementById('pp-month').textContent = month ? `(${month})` : '';
+  const total = list.reduce((s,r)=>s+r.count,0);
+  document.getElementById('pp-total').textContent = total ? `${total.toLocaleString()} posts` : '—';
+  const ppBars = document.getElementById('pp-bars');
+  ppBars.innerHTML = '';
+  const max = Math.max(1, ...list.map(r=>r.count));
+  const top = list.slice(0,8);
+  for(const row of top){
+    const wrap = document.createElement('div'); wrap.className='barrow'; wrap.style.margin='6px 0';
+    const lbl = document.createElement('div'); lbl.style.width='105px'; lbl.textContent=row.platform; lbl.style.color='#d4d4d4';
+    const barw= document.createElement('div'); barw.className='barwrap';
+    const bar = document.createElement('div'); bar.className='bar'; bar.style.width = `${(row.count/max)*100}%`;
+    barw.appendChild(bar);
+    const num = document.createElement('div'); num.className='mono'; num.style.minWidth='56px'; num.style.textAlign='right'; num.textContent=row.count.toLocaleString();
+    wrap.appendChild(lbl); wrap.appendChild(barw); wrap.appendChild(num);
+    ppBars.appendChild(wrap);
+  }
+  if(!top.length){
+    const n = document.createElement('div');
+    n.style.opacity='.7'; n.textContent='No platforms this month.'; ppBars.appendChild(n);
+  }
+}
+
+/* ===== VIEW MONTHS CONTROL (range-aware) ===== */
+function setViewMonths(newMonths){
+  viewMonths = newMonths.slice();
+  if(!viewMonths.length){
+    enableTimeline(false);
+    setError('No months in selected range.');
+    return;
+  }
+  enableTimeline(true);
+  slider.min = 0;
+  slider.max = viewMonths.length - 1;
+  slider.value = 0;
+  fromEl.textContent = viewMonths[0];
+  toEl.textContent   = viewMonths[viewMonths.length-1];
+  setMonth(0); // show first in range
+}
+
+function setMonth(i){
+  if(!viewMonths.length) return;
+  i=Math.max(0,Math.min(i,viewMonths.length-1));
+  monthIndex=i; slider.value=i;
+  const m=viewMonths[i]; monthEl.textContent=m;
+
+  // clear & apply highlights
+  countryToBorderGroup.forEach((_,name)=> setBorderHighlight(name,false));
+  const list = C_MAP.get(m) || [];
+  for(const {name} of list) setBorderHighlight(name,true);
+
+  renderCountriesPanel(m, list);
+  renderPlatformsPanel(m, P_MAP.get(m) || []);
+}
+
+/* ===== DATE RANGE APPLY/RESET ===== */
+function applyRange(){
+  if(!allMonths.length) return;
+  const s = (startMonthEl.value || '').trim();
+  const e = (endMonthEl.value   || '').trim();
+
+  // if either missing, ignore and keep current
+  if(!s && !e){ setViewMonths(allMonths); return; }
+
+  const start = s || allMonths[0];
+  const end   = e || allMonths[allMonths.length-1];
+  // months are ISO-like "YYYY-MM" so lexicographic compare works
+  const filtered = allMonths.filter(m => (m >= start) && (m <= end));
+  setViewMonths(filtered.length ? filtered : allMonths);
+}
+function resetRange(){
+  startMonthEl.value = '';
+  endMonthEl.value   = '';
+  setViewMonths(allMonths);
+}
+
+/* ===== INTERACTION & LOOP ===== */
+function animate(){
+  if(!controls.dragging) globe.rotation.y += THREE.MathUtils.degToRad(ROT_SPEED);
+  controls.update();
+  renderer.render(scene,camera);
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+
+let playTimer=null;
+function monthCycle(){
+  if(playTimer) clearTimeout(playTimer);
+  playTimer=setTimeout(()=>{
+    setMonth((monthIndex+1)%viewMonths.length);
+    monthCycle();
+  },1100);
+}
+playBtn.addEventListener('click',()=>{
+  if(!viewMonths.length) return;
+  if(playTimer){ clearTimeout(playTimer); playTimer=null; playBtn.textContent='▶ Play'; }
+  else{ playBtn.textContent='⏸ Pause'; monthCycle(); }
+});
+slider.addEventListener('input',(e)=>{
+  if(playTimer){ clearTimeout(playTimer); playTimer=null; playBtn.textContent='▶ Play'; }
+  setMonth(+e.target.value);
+});
+applyRangeEl.addEventListener('click', ()=>{
+  if(playTimer){ clearTimeout(playTimer); playTimer=null; playBtn.textContent='▶ Play'; }
+  applyRange();
+});
+resetRangeEl.addEventListener('click', ()=>{
+  if(playTimer){ clearTimeout(playTimer); playTimer=null; playBtn.textContent='▶ Play'; }
+  resetRange();
+});
+
+/* ===== DRAGGABLE PANELS ===== */
+let zTop = 100;
+function clampPanelIntoViewport(panel){
+  const rect = panel.getBoundingClientRect();
+  const left = Math.min(Math.max(rect.left, 0), window.innerWidth - rect.width);
+  const top  = Math.min(Math.max(rect.top,  0), window.innerHeight - rect.height);
+  panel.style.left = left + 'px';
+  panel.style.top  = top  + 'px';
+  panel.style.right = 'auto';
+}
+function restorePanelPosition(panel){
+  const key = 'pos_' + panel.id;
+  const val = localStorage.getItem(key);
+  if(!val) return;
+  try{
+    const {left, top} = JSON.parse(val);
+    panel.style.left = left + 'px';
+    panel.style.top  = top  + 'px';
+    panel.style.right = 'auto';
+  }catch{}
+}
+function persistPanelPosition(panel){
+  const rect = panel.getBoundingClientRect();
+  localStorage.setItem('pos_'+panel.id, JSON.stringify({left: rect.left, top: rect.top}));
+}
+function makeDraggable(panel){
+  const handle = panel.querySelector('h3') || panel;
+  let dragging=false, startX=0, startY=0, startLeft=0, startTop=0;
+
+  function begin(clientX, clientY){
+    const cs = getComputedStyle(panel);
+    if(cs.right !== 'auto'){
+      const left = window.innerWidth - panel.offsetWidth - parseFloat(cs.right);
+      panel.style.left = left + 'px'; panel.style.right = 'auto';
+    }
+    const rect = panel.getBoundingClientRect();
+    startX = clientX; startY = clientY; startLeft = rect.left; startTop = rect.top;
+    dragging = true; panel.style.zIndex = (++zTop).toString(); document.body.style.userSelect = 'none';
+  }
+  function move(clientX, clientY){
+    if(!dragging) return;
+    let nx = startLeft + (clientX - startX);
+    let ny = startTop  + (clientY - startY);
+    nx = Math.min(Math.max(nx, 0), window.innerWidth - panel.offsetWidth);
+    ny = Math.min(Math.max(ny, 0), window.innerHeight - panel.offsetHeight);
+    panel.style.left = nx + 'px'; panel.style.top  = ny + 'px';
+  }
+  function end(){ if(!dragging) return; dragging=false; document.body.style.userSelect = ''; persistPanelPosition(panel); }
+
+  handle.addEventListener('mousedown', e=>{ begin(e.clientX, e.clientY); e.preventDefault(); });
+  window.addEventListener('mousemove', e=> move(e.clientX, e.clientY));
+  window.addEventListener('mouseup', end);
+
+  handle.addEventListener('touchstart', e=>{ const t=e.touches[0]; begin(t.clientX,t.clientY); }, {passive:true});
+  window.addEventListener('touchmove', e=>{ if(!dragging) return; const t=e.touches[0]; move(t.clientX,t.clientY); }, {passive:true});
+  window.addEventListener('touchend', end);
+}
+['panelCountries','panelPlatforms'].forEach(id=>{
+  const el = document.getElementById(id);
+  makeDraggable(el);
+  const cs = getComputedStyle(el);
+  if(cs.right !== 'auto'){
+    const left = window.innerWidth - el.offsetWidth - parseFloat(cs.right);
+    el.style.left = left + 'px'; el.style.right = 'auto';
+  }
+  restorePanelPosition(el);
+  clampPanelIntoViewport(el);
+});
+window.addEventListener('resize',()=>{
+  camera.aspect=window.innerWidth/window.innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth,window.innerHeight);
+  [document.getElementById('panelCountries'), document.getElementById('panelPlatforms')].forEach(clampPanelIntoViewport);
+});
+
+/* ===== BOOT ===== */
+(async function boot(){
+  try{
+    setStatus('Loading borders…');
+    await loadBorders();
+    const out = await loadCSV();
+    allMonths = out.months || [];
+    if(!allMonths.length){
+      setError('No valid (Country, Timestamp) rows parsed from CSV.');
+      enableTimeline(false);
+      return;
+    }
+    // Pre-fill range with full extent
+    startMonthEl.value = allMonths[0];
+    endMonthEl.value   = allMonths[allMonths.length-1];
+
+    setViewMonths(allMonths);
+  }catch(err){
+    console.error(err);
+    setError('Failed to initialize.');
+  }
+})();
+</script>
+</body>
+</html>
