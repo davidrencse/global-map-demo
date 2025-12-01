@@ -23,8 +23,8 @@
   #ui{position:fixed;left:24px;top:18px;z-index:10;display:flex;gap:16px;align-items:center}
   .title{font-weight:800;letter-spacing:.5px}
   #monthLabel{opacity:.55}
-  #status{padding:4px 8px;border:1px solid var(--stroke);border-radius:6px;background:#111}
-  #status.error{border-color:#ff7070;background:#220a0a;color:#ffd7d7}
+  #status{padding:4px 8px;border:1px solid var(--stroke);border-radius:6px;background:#111; display:none}
+  #status.error{border-color:#ff7070;background:#220a0a;color:#ffd7d7; display:inline-block}
 
   /* Legend */
   #legend{position:fixed;left:24px;top:54px;z-index:10;padding:8px 10px;border-radius:8px;background:#0c0c0c;border:1px solid var(--stroke);font-size:12px;opacity:.85}
@@ -55,13 +55,13 @@
   .bar{height:100%;background:linear-gradient(90deg,#fff,#bbb)}
   .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;color:#ddd}
 
-  /* Date Range Modal (centered, fixed) */
+  /* Date Range Modal (center top, fixed) */
   #dateBox{
-    position:fixed; inset:0; display:flex; align-items:flex-start; padding-top: 12px; justify-content:center; z-index:50;
+    position:fixed; left:0; right:0; top:8px; display:flex; align-items:flex-start; justify-content:center; z-index:50;
     pointer-events:none;
   }
   #dateCard{
-    pointer-events:auto; min-width:560px; padding:14px; border-radius:10px;
+    pointer-events:auto; min-width:560px; padding:10px 14px; border-radius:10px;
     background:#0f0f0f; border:1px solid var(--stroke); box-shadow:0 10px 40px rgba(0,0,0,.6);
     display:flex; gap:12px; align-items:center; justify-content:center;
   }
@@ -79,6 +79,7 @@
 <div id="ui">
   <div class="title">Global Social Sentiment</div>
   <div id="monthLabel"></div>
+  <div id="status"></div>
 </div>
 <div id="legend">
   <div><b>Visualization:</b> countries with posts in the month are <b>highlighted</b> (wire borders).</div>
@@ -86,7 +87,7 @@
   <div>By David Ren at david.ren@nyu.edu</div>
 </div>
 
-<!-- Date Range (centered, fixed) -->
+<!-- Date Range (center-top, fixed) -->
 <div id="dateBox">
   <div id="dateCard">
     <label for="startMonth">Start</label>
@@ -123,7 +124,8 @@
 
 <script>
 /* ===== PATHS (LOCAL) ===== */
-const CSV_PATH    = 'data/sentimentdataset.csv';
+/* Use ONLY the cleaned file */
+const CSV_PATH = 'data/cleaned_sentiment_data.csv';
 const EARTH_TEX   = 'assets/earth.jpg';
 const GEOJSON_LOC = 'assets/countries.geo.json';
 
@@ -131,10 +133,10 @@ const GEOJSON_LOC = 'assets/countries.geo.json';
 /* brighter defaults & highlight */
 const R            = 80;
 const ROT_SPEED    = 0.15;            // deg/frame
-const BORDER_COLOR = 0xEAF2FF;        // light border
-const HILITE_COLOR = 0xFFFFFF;        // pure white highlight
-const BORDER_ALPHA = 0.18;            // more visible
-const HILITE_ALPHA = 1.00;
+const BORDER_COLOR = 0xEAF2FF;        // light border for non-highlight
+const HILITE_COLOR = 0xFFFFFF;        // pure white for highlight
+const BORDER_ALPHA = 0.18;            // dim non-highlight
+const HILITE_ALPHA = 1.00;            // bright highlight
 
 /* ===== THREE SETUP ===== */
 const canvas = document.getElementById('canvas');
@@ -197,8 +199,28 @@ const P_MAP = new Map();   // month -> [{platform,count}]
 const countryToBorderGroup = new Map();
 const aliasToCountryName = new Map();
 
-function setStatus(msg){ if(statusEl){ statusEl.textContent=msg; statusEl.classList.remove('error'); } }
-function setError(msg){ if(statusEl){ statusEl.textContent=msg; statusEl.classList.add('error'); } console.error(msg); }
+/* ===== Header mapping for the CLEANED CSV ===== */
+const COLS = {
+  country:   ['Country','country','COUNTRY','Nation','nation','Location','location'],
+  timestamp: ['Timestamp','timestamp','Date','DATE','created_at','Created','Time','time'],
+  platform:  ['Platform','platform','PLATFORM','Source','source','Site','site']
+};
+function pick(row, keys){
+  for(const k of keys) if (k in row && String(row[k]).trim()!=='') return row[k];
+  return null;
+}
+function parseDateFlexible(v){
+  if(!v) return null;
+  const tryDate = (s)=>{ const d = new Date(s); return isNaN(d) ? null : d; };
+  const s = String(v).trim();
+  return tryDate(s)
+      || tryDate(s.replace(/(\d{2})-(\d{2})-(\d{4})/,'$3-$2-$1'))
+      || tryDate(s.replaceAll('/','-'));
+}
+
+/* ===== helpers ===== */
+function setStatus(msg){ if(!statusEl) return; if(msg){ statusEl.style.display='inline-block'; statusEl.textContent=msg; statusEl.classList.remove('error'); } }
+function setError(msg){ if(!statusEl) return; statusEl.style.display='inline-block'; statusEl.textContent=msg; statusEl.classList.add('error'); console.error(msg); }
 function enableTimeline(on){ slider.disabled = !on; playBtn.disabled = !on; }
 function latLonToVec3(lat, lon, r=R){
   const phi=(90-lat)*Math.PI/180, theta=(lon+180)*Math.PI/180;
@@ -273,50 +295,52 @@ async function loadBorders(){
   }
 }
 
-/* ===== LOAD CSV & BUILD MONTH MAPS ===== */
+/* ===== LOAD CLEANED CSV & BUILD MONTH MAPS ===== */
 async function loadCSV(){
+  // single, cleaned file only
+  let txt = null;
+  try {
+    const r = await fetch(CSV_PATH);
+    if (r.ok) txt = await r.text();
+  } catch {}
+  if (!txt){
+    setError('Could not load cleaned CSV at ' + CSV_PATH);
+    return {months:[]};
+  }
+
   return new Promise((resolve)=>{
-    Papa.parse(CSV_PATH, {
-      download:true, header:true, skipEmptyLines:true,
+    Papa.parse(txt, {
+      header:true, skipEmptyLines:true,
       complete: (res)=>{
         const rows = res.data || [];
-        if(!rows.length){ setError('CSV empty: data/sentimentdataset.csv'); resolve({months:[]}); return; }
+        if(!rows.length){ setError('CSV empty: ' + CSV_PATH); resolve({months:[]}); return; }
 
         const monthsSet=new Set();
         const monthCountryCount = new Map(); // "YYYY-MM|Country" -> count
         const monthPlatformCount= new Map(); // "YYYY-MM|Platform" -> count
         let unmatched=0;
 
-        const normName = raw => {
-          const a = (raw||'').toString().trim();
-          if(aliasToCountryName.has(a)) return aliasToCountryName.get(a);
-          if(/^uk$/i.test(a)) return aliasToCountryName.get('United Kingdom')||'United Kingdom';
-          if(/^(u\.?s\.?a\.?|u\.?s\.?|us)$/i.test(a)) return aliasToCountryName.get('United States')||'United States';
-          if(/^uae$/i.test(a)) return aliasToCountryName.get('United Arab Emirates')||'United Arab Emirates';
-          return a;
-        };
-
-        function parseDate(v){
-          if(!v) return null;
-          const d=new Date(v);
-          if(!isNaN(d)) return d;
-          const cleaned = v.replace(/(\d{2})-(\d{2})-(\d{4})/,'$3-$2-$1'); // DD-MM-YYYY → YYYY-MM-DD
-          const d2=new Date(cleaned);
-          return isNaN(d2) ? null : d2;
-        }
-
         for(const r of rows){
-          const countryRaw = r.Country || r.country || r.COUNTRY;
-          const platformRaw= r.Platform || r.platform || r.PLATFORM;
-          const ts = r.Timestamp || r.timestamp || r.Date || r.DATE;
-          const d = parseDate(ts);
+          const countryRaw  = pick(r, COLS.country);
+          const platformRaw = pick(r, COLS.platform) ?? 'Unknown';
+          const tsRaw       = pick(r, COLS.timestamp);
+          const d = parseDateFlexible(tsRaw);
           if(!d) continue;
 
           const m = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
           monthsSet.add(m);
 
           if (countryRaw){
-            const name = normName(countryRaw);
+            const name = (function normalizeCountry(a){
+              const v = String(a).trim();
+              if(aliasToCountryName.has(v)) return aliasToCountryName.get(v);
+              if(/^uk$/i.test(v))  return aliasToCountryName.get('United Kingdom') || 'United Kingdom';
+              if(/^(u\.?s\.?a\.?|u\.?s\.?|us)$/i.test(v))
+                return aliasToCountryName.get('United States') || 'United States';
+              if(/^uae$/i.test(v)) return aliasToCountryName.get('United Arab Emirates') || 'United Arab Emirates';
+              return v;
+            })(countryRaw);
+
             if(countryToBorderGroup.has(name)){
               const key = `${m}|${name}`;
               monthCountryCount.set(key, (monthCountryCount.get(key)||0)+1);
@@ -324,11 +348,9 @@ async function loadCSV(){
               unmatched++;
             }
           }
-          if (platformRaw){
-            const p = (platformRaw||'').toString().trim() || 'Unknown';
-            const keyp = `${m}|${p}`;
-            monthPlatformCount.set(keyp, (monthPlatformCount.get(keyp)||0)+1);
-          }
+          const plat = String(platformRaw || 'Unknown').trim() || 'Unknown';
+          const keyp = `${m}|${plat}`;
+          monthPlatformCount.set(keyp, (monthPlatformCount.get(keyp)||0)+1);
         }
         if(unmatched) console.warn('Unmatched countries in CSV:', unmatched);
 
@@ -356,10 +378,9 @@ async function loadCSV(){
 
 /* ===== SIDE PANELS RENDER ===== */
 function renderCountriesPanel(month, list){
-  document.getElementById('pc-month').textContent = month ? `(${month})` : '';
+  pcMonth.textContent = month ? `(${month})` : '';
   const total = list.reduce((s,r)=>s+r.count,0);
-  document.getElementById('pc-total').textContent = total ? `${total.toLocaleString()} posts` : '—';
-  const pcList = document.getElementById('pc-list');
+  pcTotal.textContent = total ? `${total.toLocaleString()} posts` : '—';
   pcList.innerHTML = '';
   const top = list.slice(0,15);
   for(const row of top){
@@ -373,10 +394,9 @@ function renderCountriesPanel(month, list){
   }
 }
 function renderPlatformsPanel(month, list){
-  document.getElementById('pp-month').textContent = month ? `(${month})` : '';
+  ppMonth.textContent = month ? `(${month})` : '';
   const total = list.reduce((s,r)=>s+r.count,0);
-  document.getElementById('pp-total').textContent = total ? `${total.toLocaleString()} posts` : '—';
-  const ppBars = document.getElementById('pp-bars');
+  ppTotal.textContent = total ? `${total.toLocaleString()} posts` : '—';
   ppBars.innerHTML = '';
   const max = Math.max(1, ...list.map(r=>r.count));
   const top = list.slice(0,8);
@@ -433,13 +453,9 @@ function applyRange(){
   if(!allMonths.length) return;
   const s = (startMonthEl.value || '').trim();
   const e = (endMonthEl.value   || '').trim();
-
-  // if either missing, ignore and keep current
   if(!s && !e){ setViewMonths(allMonths); return; }
-
   const start = s || allMonths[0];
   const end   = e || allMonths[allMonths.length-1];
-  // months are ISO-like "YYYY-MM" so lexicographic compare works
   const filtered = allMonths.filter(m => (m >= start) && (m <= end));
   setViewMonths(filtered.length ? filtered : allMonths);
 }
@@ -476,11 +492,11 @@ slider.addEventListener('input',(e)=>{
   setMonth(+e.target.value);
 });
 applyRangeEl.addEventListener('click', ()=>{
-  if(playTimer){ clearTimeout(playTimer); playTimer=null; playBtn.textContent='▶ Play'; }
+  if(playTimer){ clearTimeout(playTimer); clearTimeout(playTimer); playBtn.textContent='▶ Play'; }
   applyRange();
 });
 resetRangeEl.addEventListener('click', ()=>{
-  if(playTimer){ clearTimeout(playTimer); playTimer=null; playBtn.textContent='▶ Play'; }
+  if(playTimer){ clearTimeout(playTimer); playBtn.textContent='▶ Play'; }
   resetRange();
 });
 
@@ -566,7 +582,7 @@ window.addEventListener('resize',()=>{
     const out = await loadCSV();
     allMonths = out.months || [];
     if(!allMonths.length){
-      setError('No valid (Country, Timestamp) rows parsed from CSV.');
+      setError('No valid (Country, Timestamp) rows parsed from cleaned CSV.');
       enableTimeline(false);
       return;
     }
@@ -575,6 +591,8 @@ window.addEventListener('resize',()=>{
     endMonthEl.value   = allMonths[allMonths.length-1];
 
     setViewMonths(allMonths);
+    setStatus(''); // hide status
+    statusEl.style.display = 'none';
   }catch(err){
     console.error(err);
     setError('Failed to initialize.');
