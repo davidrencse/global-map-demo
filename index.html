@@ -23,8 +23,8 @@
   #ui{position:fixed;left:24px;top:18px;z-index:10;display:flex;gap:16px;align-items:center}
   .title{font-weight:800;letter-spacing:.5px}
   #monthLabel{opacity:.55}
-  #status{padding:4px 8px;border:1px solid var(--stroke);border-radius:6px;background:#111; display:none}
-  #status.error{border-color:#ff7070;background:#220a0a;color:#ffd7d7; display:inline-block}
+  #status{padding:4px 8px;border:1px solid var(--stroke);border-radius:6px;background:#111}
+  #status.error{border-color:#ff7070;background:#220a0a;color:#ffd7d7}
 
   /* Legend */
   #legend{position:fixed;left:24px;top:54px;z-index:10;padding:8px 10px;border-radius:8px;background:#0c0c0c;border:1px solid var(--stroke);font-size:12px;opacity:.85}
@@ -55,13 +55,13 @@
   .bar{height:100%;background:linear-gradient(90deg,#fff,#bbb)}
   .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;color:#ddd}
 
-  /* Date Range Modal (center top, fixed) */
+  /* Date Range Modal (centered, fixed at top) */
   #dateBox{
-    position:fixed; left:0; right:0; top:8px; display:flex; align-items:flex-start; justify-content:center; z-index:50;
+    position:fixed; inset:0; display:flex; align-items:flex-start; padding-top: 12px; justify-content:center; z-index:50;
     pointer-events:none;
   }
   #dateCard{
-    pointer-events:auto; min-width:560px; padding:10px 14px; border-radius:10px;
+    pointer-events:auto; min-width:560px; padding:14px; border-radius:10px;
     background:#0f0f0f; border:1px solid var(--stroke); box-shadow:0 10px 40px rgba(0,0,0,.6);
     display:flex; gap:12px; align-items:center; justify-content:center;
   }
@@ -79,7 +79,6 @@
 <div id="ui">
   <div class="title">Global Social Sentiment</div>
   <div id="monthLabel"></div>
-  <div id="status"></div>
 </div>
 <div id="legend">
   <div><b>Visualization:</b> countries with posts in the month are <b>highlighted</b> (wire borders).</div>
@@ -87,7 +86,7 @@
   <div>By David Ren at david.ren@nyu.edu</div>
 </div>
 
-<!-- Date Range (center-top, fixed) -->
+<!-- Date Range (centered top, fixed) -->
 <div id="dateBox">
   <div id="dateCard">
     <label for="startMonth">Start</label>
@@ -108,11 +107,20 @@
 </div>
 
 <!-- RIGHT: Platforms this month -->
-<div class="panel right" id="panelPlatforms">
+<div class="panel right" id="panelPlatforms" style="top:110px;">
   <h3>Posts by platform <small id="pp-month"></small></h3>
   <div class="mono" id="pp-total">—</div>
   <div class="sep"></div>
   <div id="pp-bars"></div>
+</div>
+
+<!-- RIGHT: Sentiment pie this month -->
+<div class="panel right" id="panelSentiment" style="top:520px;">
+  <h3>Emotions / Sentiment <small id="ps-month"></small></h3>
+  <div class="mono" id="ps-total">—</div>
+  <div class="sep"></div>
+  <div id="ps-pie" style="display:flex;justify-content:center;"></div>
+  <div id="ps-legend" class="list" style="margin-top:10px;"></div>
 </div>
 
 <!-- Timeline -->
@@ -123,20 +131,18 @@
 </div>
 
 <script>
-/* ===== PATHS (LOCAL) ===== */
-/* Use ONLY the cleaned file */
-const CSV_PATH = 'data/cleaned_sentiment_data.csv';
+/* ===== PATHS (use CLEANED CSV) ===== */
+const CSV_PATH    = 'data/cleaned_sentiment_data.csv';
 const EARTH_TEX   = 'assets/earth.jpg';
 const GEOJSON_LOC = 'assets/countries.geo.json';
 
-/* ===== TUNING ===== */
-/* brighter defaults & highlight */
+/* ===== TUNING (bright outlines) ===== */
 const R            = 80;
 const ROT_SPEED    = 0.15;            // deg/frame
-const BORDER_COLOR = 0xEAF2FF;        // light border for non-highlight
-const HILITE_COLOR = 0xFFFFFF;        // pure white for highlight
-const BORDER_ALPHA = 0.18;            // dim non-highlight
-const HILITE_ALPHA = 1.00;            // bright highlight
+const BORDER_COLOR = 0xEAF2FF;        // light border
+const HILITE_COLOR = 0xFFFFFF;        // pure white highlight
+const BORDER_ALPHA = 0.18;            // non-highlight opacity
+const HILITE_ALPHA = 1.00;            // highlight opacity
 
 /* ===== THREE SETUP ===== */
 const canvas = document.getElementById('canvas');
@@ -192,36 +198,40 @@ const ppMonth = document.getElementById('pp-month');
 const ppTotal = document.getElementById('pp-total');
 const ppBars  = document.getElementById('pp-bars');
 
+const psMonth = document.getElementById('ps-month');
+const psTotal = document.getElementById('ps-total');
+const psPie   = document.getElementById('ps-pie');
+const psLegend= document.getElementById('ps-legend');
+
 /* months: all vs. current view */
 let allMonths = [], viewMonths = [], monthIndex = 0;
+
+/* per-month aggregates */
 const C_MAP = new Map();   // month -> [{name,count}]
 const P_MAP = new Map();   // month -> [{platform,count}]
+const S_MAP = new Map();   // month -> [{sentiment,count}]
+
+/* country shapes & alias map */
 const countryToBorderGroup = new Map();
 const aliasToCountryName = new Map();
 
-/* ===== Header mapping for the CLEANED CSV ===== */
+/* helpers */
+function setStatus(msg){ if(statusEl){ statusEl.textContent=msg; statusEl.classList.remove('error'); } }
+function setError(msg){ if(statusEl){ statusEl.textContent=msg; statusEl.classList.add('error'); } console.error(msg); }
+function enableTimeline(on){ slider.disabled = !on; playBtn.disabled = !on; }
+
+/* flexible header picking (handles different CSV header names) */
 const COLS = {
   country:   ['Country','country','COUNTRY','Nation','nation','Location','location'],
   timestamp: ['Timestamp','timestamp','Date','DATE','created_at','Created','Time','time'],
-  platform:  ['Platform','platform','PLATFORM','Source','source','Site','site']
+  platform:  ['Platform','platform','PLATFORM','Source','source','Site','site'],
+  sentiment: ['Sentiment','sentiment','Emotion','emotion','Label','label']
 };
 function pick(row, keys){
-  for(const k of keys) if (k in row && String(row[k]).trim()!=='') return row[k];
+  for(const k of keys){ if(row[k] != null && String(row[k]).trim() !== '') return row[k]; }
   return null;
 }
-function parseDateFlexible(v){
-  if(!v) return null;
-  const tryDate = (s)=>{ const d = new Date(s); return isNaN(d) ? null : d; };
-  const s = String(v).trim();
-  return tryDate(s)
-      || tryDate(s.replace(/(\d{2})-(\d{2})-(\d{4})/,'$3-$2-$1'))
-      || tryDate(s.replaceAll('/','-'));
-}
 
-/* ===== helpers ===== */
-function setStatus(msg){ if(!statusEl) return; if(msg){ statusEl.style.display='inline-block'; statusEl.textContent=msg; statusEl.classList.remove('error'); } }
-function setError(msg){ if(!statusEl) return; statusEl.style.display='inline-block'; statusEl.textContent=msg; statusEl.classList.add('error'); console.error(msg); }
-function enableTimeline(on){ slider.disabled = !on; playBtn.disabled = !on; }
 function latLonToVec3(lat, lon, r=R){
   const phi=(90-lat)*Math.PI/180, theta=(lon+180)*Math.PI/180;
   return new THREE.Vector3(
@@ -295,52 +305,50 @@ async function loadBorders(){
   }
 }
 
-/* ===== LOAD CLEANED CSV & BUILD MONTH MAPS ===== */
+/* ===== LOAD CSV & BUILD MONTH MAPS ===== */
 async function loadCSV(){
-  // single, cleaned file only
-  let txt = null;
-  try {
-    const r = await fetch(CSV_PATH);
-    if (r.ok) txt = await r.text();
-  } catch {}
-  if (!txt){
-    setError('Could not load cleaned CSV at ' + CSV_PATH);
-    return {months:[]};
-  }
-
   return new Promise((resolve)=>{
-    Papa.parse(txt, {
-      header:true, skipEmptyLines:true,
+    Papa.parse(CSV_PATH, {
+      download:true, header:true, skipEmptyLines:true,
       complete: (res)=>{
         const rows = res.data || [];
-        if(!rows.length){ setError('CSV empty: ' + CSV_PATH); resolve({months:[]}); return; }
+        if(!rows.length){ setError('CSV empty: '+CSV_PATH); resolve({months:[]}); return; }
 
         const monthsSet=new Set();
-        const monthCountryCount = new Map(); // "YYYY-MM|Country" -> count
-        const monthPlatformCount= new Map(); // "YYYY-MM|Platform" -> count
+        const monthCountryCount  = new Map(); // "YYYY-MM|Country"   -> count
+        const monthPlatformCount = new Map(); // "YYYY-MM|Platform"  -> count
+        const monthSentimentCount= new Map(); // "YYYY-MM|Sentiment" -> count
         let unmatched=0;
 
+        function parseDate(v){
+          if(!v) return null;
+          const d=new Date(v);
+          if(!isNaN(d)) return d;
+          const cleaned = String(v).replace(/(\d{2})-(\d{2})-(\d{4})/,'$3-$2-$1'); // DD-MM-YYYY → YYYY-MM-DD
+          const d2=new Date(cleaned);
+          return isNaN(d2) ? null : d2;
+        }
+
         for(const r of rows){
-          const countryRaw  = pick(r, COLS.country);
-          const platformRaw = pick(r, COLS.platform) ?? 'Unknown';
-          const tsRaw       = pick(r, COLS.timestamp);
-          const d = parseDateFlexible(tsRaw);
+          const countryRaw = pick(r, COLS.country);
+          const platformRaw= pick(r, COLS.platform);
+          const ts         = pick(r, COLS.timestamp);
+          const sentRaw    = pick(r, COLS.sentiment);
+
+          const d = parseDate(ts);
           if(!d) continue;
 
           const m = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
           monthsSet.add(m);
 
           if (countryRaw){
-            const name = (function normalizeCountry(a){
-              const v = String(a).trim();
-              if(aliasToCountryName.has(v)) return aliasToCountryName.get(v);
-              if(/^uk$/i.test(v))  return aliasToCountryName.get('United Kingdom') || 'United Kingdom';
-              if(/^(u\.?s\.?a\.?|u\.?s\.?|us)$/i.test(v))
-                return aliasToCountryName.get('United States') || 'United States';
-              if(/^uae$/i.test(v)) return aliasToCountryName.get('United Arab Emirates') || 'United Arab Emirates';
-              return v;
-            })(countryRaw);
-
+            const a = String(countryRaw).trim();
+            const name =
+              aliasToCountryName.get(a) ||
+              (/^uk$/i.test(a)   ? (aliasToCountryName.get('United Kingdom')||'United Kingdom') :
+               /^(u\.?s\.?a\.?|u\.?s\.?|us)$/i.test(a) ? (aliasToCountryName.get('United States')||'United States') :
+               /^uae$/i.test(a)  ? (aliasToCountryName.get('United Arab Emirates')||'United Arab Emirates') :
+               a);
             if(countryToBorderGroup.has(name)){
               const key = `${m}|${name}`;
               monthCountryCount.set(key, (monthCountryCount.get(key)||0)+1);
@@ -348,27 +356,39 @@ async function loadCSV(){
               unmatched++;
             }
           }
-          const plat = String(platformRaw || 'Unknown').trim() || 'Unknown';
-          const keyp = `${m}|${plat}`;
-          monthPlatformCount.set(keyp, (monthPlatformCount.get(keyp)||0)+1);
+          if (platformRaw){
+            const p = (String(platformRaw).trim() || 'Unknown');
+            const keyp = `${m}|${p}`;
+            monthPlatformCount.set(keyp, (monthPlatformCount.get(keyp)||0)+1);
+          }
+          if (sentRaw){
+            const s = (String(sentRaw).trim() || 'Other');
+            const keys = `${m}|${s}`;
+            monthSentimentCount.set(keys, (monthSentimentCount.get(keys)||0)+1);
+          }
         }
         if(unmatched) console.warn('Unmatched countries in CSV:', unmatched);
 
         const months = Array.from(monthsSet).sort();
 
-        // fill global maps C_MAP / P_MAP
+        // fill global maps C_MAP / P_MAP / S_MAP
         for(const m of months){
-          const carr=[], parr=[];
+          const carr=[], parr=[], sarr=[];
           for(const [key,count] of monthCountryCount.entries()){
             const [km,name]=key.split('|'); if(km===m) carr.push({name,count});
           }
           for(const [key,count] of monthPlatformCount.entries()){
             const [km,plat]=key.split('|'); if(km===m) parr.push({platform:plat,count});
           }
+          for(const [key,count] of monthSentimentCount.entries()){
+            const [km,lab]=key.split('|'); if(km===m) sarr.push({sentiment:lab,count});
+          }
           carr.sort((a,b)=>b.count-a.count);
           parr.sort((a,b)=>b.count-a.count);
+          sarr.sort((a,b)=>b.count-a.count);
           C_MAP.set(m, carr);
           P_MAP.set(m, parr);
+          S_MAP.set(m, sarr);
         }
         resolve({months});
       }
@@ -416,6 +436,80 @@ function renderPlatformsPanel(month, list){
   }
 }
 
+/* Sentiment pie (SVG, grayscale aesthetic) */
+function renderSentimentPanel(month, list){
+  psMonth.textContent = month ? `(${month})` : '';
+  const total = list.reduce((s,r)=>s+r.count,0);
+  psTotal.textContent = total ? `${total.toLocaleString()} posts` : '—';
+  psPie.innerHTML = '';
+  psLegend.innerHTML = '';
+
+  if (!total) {
+    psPie.innerHTML = '<div style="opacity:.7">No sentiments this month.</div>';
+    return;
+  }
+
+  const MAX_SLICE = 6;
+  const top = list.slice(0, MAX_SLICE - 1);
+  const rest = list.slice(MAX_SLICE - 1);
+  const restSum = rest.reduce((s,r)=>s+r.count,0);
+  const data = restSum ? [...top, { sentiment: 'Other', count: restSum }] : list.slice(0, MAX_SLICE);
+
+  const W = 240, H = 240, R = 110, CX = W/2, CY = H/2;
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('width', W);
+  svg.setAttribute('height', H);
+
+  const COLORS = ['#ffffff', '#e6e6e6', '#cccccc', '#b3b3b3', '#999999', '#808080', '#666666', '#4d4d4d'];
+
+  let startAngle = -Math.PI/2; // start at top
+  data.forEach((d, i)=>{
+    const frac = d.count / total;
+    const endAngle = startAngle + frac * Math.PI * 2;
+
+    const x1 = CX + R * Math.cos(startAngle);
+    const y1 = CY + R * Math.sin(startAngle);
+    const x2 = CX + R * Math.cos(endAngle);
+    const y2 = CY + R * Math.sin(endAngle);
+    const largeArc = (endAngle - startAngle) > Math.PI ? 1 : 0;
+
+    const path = document.createElementNS(svgNS, 'path');
+    const dAttr = [
+      `M ${CX} ${CY}`,
+      `L ${x1} ${y1}`,
+      `A ${R} ${R} 0 ${largeArc} 1 ${x2} ${y2}`,
+      'Z'
+    ].join(' ');
+    path.setAttribute('d', dAttr);
+    path.setAttribute('fill', COLORS[i % COLORS.length]);
+    path.setAttribute('stroke', 'rgba(255,255,255,.22)');
+    path.setAttribute('stroke-width', '1');
+    svg.appendChild(path);
+
+    startAngle = endAngle;
+  });
+
+  psPie.appendChild(svg);
+
+  // legend
+  data.forEach((d, i)=>{
+    const key = document.createElement('div');
+    key.className = 'key';
+    key.innerHTML = `<span style="
+      display:inline-block;width:10px;height:10px;
+      background:${(i<COLORS.length?COLORS[i]:'#888')};
+      border:1px solid rgba(255,255,255,.25);
+      margin-right:8px;"></span>${d.sentiment}`;
+    const val = document.createElement('div');
+    val.className = 'val';
+    const pct = (d.count / total) * 100;
+    val.textContent = `${d.count.toLocaleString()}  (${pct.toFixed(1)}%)`;
+    psLegend.appendChild(key);
+    psLegend.appendChild(val);
+  });
+}
+
 /* ===== VIEW MONTHS CONTROL (range-aware) ===== */
 function setViewMonths(newMonths){
   viewMonths = newMonths.slice();
@@ -446,6 +540,7 @@ function setMonth(i){
 
   renderCountriesPanel(m, list);
   renderPlatformsPanel(m, P_MAP.get(m) || []);
+  renderSentimentPanel(m, S_MAP.get(m) || []);
 }
 
 /* ===== DATE RANGE APPLY/RESET ===== */
@@ -453,7 +548,9 @@ function applyRange(){
   if(!allMonths.length) return;
   const s = (startMonthEl.value || '').trim();
   const e = (endMonthEl.value   || '').trim();
+
   if(!s && !e){ setViewMonths(allMonths); return; }
+
   const start = s || allMonths[0];
   const end   = e || allMonths[allMonths.length-1];
   const filtered = allMonths.filter(m => (m >= start) && (m <= end));
@@ -492,11 +589,11 @@ slider.addEventListener('input',(e)=>{
   setMonth(+e.target.value);
 });
 applyRangeEl.addEventListener('click', ()=>{
-  if(playTimer){ clearTimeout(playTimer); clearTimeout(playTimer); playBtn.textContent='▶ Play'; }
+  if(playTimer){ clearTimeout(playTimer); playTimer=null; playBtn.textContent='▶ Play'; }
   applyRange();
 });
 resetRangeEl.addEventListener('click', ()=>{
-  if(playTimer){ clearTimeout(playTimer); playBtn.textContent='▶ Play'; }
+  if(playTimer){ clearTimeout(playTimer); playTimer=null; playBtn.textContent='▶ Play'; }
   resetRange();
 });
 
@@ -557,7 +654,7 @@ function makeDraggable(panel){
   window.addEventListener('touchmove', e=>{ if(!dragging) return; const t=e.touches[0]; move(t.clientX,t.clientY); }, {passive:true});
   window.addEventListener('touchend', end);
 }
-['panelCountries','panelPlatforms'].forEach(id=>{
+['panelCountries','panelPlatforms','panelSentiment'].forEach(id=>{
   const el = document.getElementById(id);
   makeDraggable(el);
   const cs = getComputedStyle(el);
@@ -571,7 +668,9 @@ function makeDraggable(panel){
 window.addEventListener('resize',()=>{
   camera.aspect=window.innerWidth/window.innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth,window.innerHeight);
-  [document.getElementById('panelCountries'), document.getElementById('panelPlatforms')].forEach(clampPanelIntoViewport);
+  ['panelCountries','panelPlatforms','panelSentiment'].forEach(id=>{
+    clampPanelIntoViewport(document.getElementById(id));
+  });
 });
 
 /* ===== BOOT ===== */
@@ -582,7 +681,7 @@ window.addEventListener('resize',()=>{
     const out = await loadCSV();
     allMonths = out.months || [];
     if(!allMonths.length){
-      setError('No valid (Country, Timestamp) rows parsed from cleaned CSV.');
+      setError('No valid (Country, Timestamp) rows parsed from CSV.');
       enableTimeline(false);
       return;
     }
@@ -591,8 +690,6 @@ window.addEventListener('resize',()=>{
     endMonthEl.value   = allMonths[allMonths.length-1];
 
     setViewMonths(allMonths);
-    setStatus(''); // hide status
-    statusEl.style.display = 'none';
   }catch(err){
     console.error(err);
     setError('Failed to initialize.');
